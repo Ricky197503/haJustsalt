@@ -23,8 +23,8 @@
 
 const char* version = "0.0.1";
 // Update these with values suitable for your wifi network.
-const char* ssid = "Durand-wifi";
-const char* password = "1975198020132017";
+const char* ssid = "xxxxxxxxx-wifi";
+const char* password = "xxxxxxxxxxx";
 
 //Home Assistant integration
 // configure here your HA params for connection to MQTT server
