@@ -15,16 +15,21 @@
 #include <NimBLEDevice.h>
 #include <ArduinoHA.h>
 #include <WiFi.h>
+
 #include <AsyncTCP.h>
 #include <ESPAsyncWebServer.h>
 #include <ElegantOTA.h>
 #include <TaskScheduler.h>
 
+//#include <FS.h>         
+//#include <DNSServer.h>
+//#include <WiFiManager.h>   
+//#include <ArduinoJson.h>   
 
-const char* version = "0.0.1";
+const char* version = "0.1.2";
 // Update these with values suitable for your wifi network.
-const char* ssid = "xxxxxxxxx-wifi";
-const char* password = "xxxxxxxxxxx";
+const char* ssid = "Durand-wifi";
+const char* password = "1975198020132017";
 
 //Home Assistant integration
 // configure here your HA params for connection to MQTT server
@@ -63,7 +68,7 @@ WiFiServer telnetServer(23);
 
 Scheduler timeScheduler;
 AsyncWebServer webServer(80);
-
+//WebServer webServer(80);
 
 unsigned long previousMillis = 0;
 unsigned long interval = 30000;
@@ -88,9 +93,15 @@ void onValueConsigneacideChanged( HANumeric number, HANumber* sender);
 void onValueConsigneprodChanged( HANumeric number, HANumber* sender);
 void onValueConsigneinversionChanged( HANumeric number, HANumber* sender);
 void onwriteble (int ValueID ,float numberset,int ValueSizea);
+void handleRoot();
+void reboot_Bluetooth();
+void reboot_ESP();
 
 bool connectToServer();
 
+
+Task taskRebootBluetooth(interval*200,TASK_FOREVER,&reboot_Bluetooth);
+Task taskRebootESP(interval*1000,TASK_FOREVER,&reboot_ESP);
 
 Task taskSetup(5000,TASK_FOREVER,&setup_wifi);
 Task taskReconnectWifi(interval,TASK_FOREVER,&reconnect_wifi);
@@ -105,82 +116,19 @@ Task taskloopAvaibilityMQTT(3000, TASK_FOREVER, &cb_loopAvaibilityMQTT);
 
 static uint32_t scanTime = 0; /** 0 = scan forever */
 
-struct trame_value {
-    uint8_t     V_id_00;
-    float       V_id_01;    // PH
-    float       V_id_02;
-    float       V_id_03;
-    uint16_t    V_id_06;    // ORP
-    float       V_id_08;
-    float       V_id_09;    // temp Eau
-    float       V_id_0A;    // Sel
-    float       V_id_0B;
-    float       V_id_0C;
-    float       V_id_0D;
-    float       V_id_0E;
-    float       V_id_0F;    // minutes de fonctionement
-    float       V_id_10;
-    float       V_id_11;    // Volume eau
-    float       V_id_12;
-    float       V_id_13;
-    float       V_id_1F;
-    float       V_id_28;
-    float       V_id_29;
-    float       V_id_2A;
-    float       V_id_30;    // Consigne PH
-    float       V_id_31;
-    float       V_id_32;    // % Acide
-    float       V_id_33;    // Production ?
-    float       V_id_35;    // Consigne ORP
-    float       V_id_37;    // Seuil alarme ORP
-    float       V_id_39;    // Inversion
-    float       V_id_50;
-    float       V_id_51;
-    float       V_id_5F;
-    float       V_id_69;
-    float       V_id_6A;
-    float       V_id_8F;
-    uint64_t    V_id_90;
-    uint64_t    V_id_91;
-    float       V_id_92;
-    uint16_t     V_id_93;
-    bool        V_id_93_b00;
-    bool        V_id_93_b01;
-    bool        V_id_93_b02;
-    bool        V_id_93_b03;
-    bool        V_id_93_b04;
-    bool        V_id_93_b05;
-    bool        V_id_93_b06;
-    bool        V_id_93_b07;
-    bool        V_id_93_b10;
-    bool        V_id_93_b11;
-    bool        V_id_93_b12;
-    bool        V_id_93_b13;
-    bool        V_id_93_b14;
-    bool        V_id_93_b15;
-    bool        V_id_93_b16;
-    bool        V_id_93_b17;
-    float       V_id_94;
-    uint32_t    V_id_95;    // ID Code
-    String      V_id_96;    // Version
-    String      V_id_97;    // Slave
-    String      V_id_99;    // Nom
-    String      V_id_9A;    // SN
-    float       V_id_9B;
-    float       V_id_9C;
-    String      V_id_9D;
-    String      V_id_A3;
-    float       V_id_B0;
-    String      V_id_B1;    // Mac adresse
-    String      V_id_D0;
-    float       V_id_D1;
-    String      V_id_E1;
-    String      V_id_E2;
-    String      V_id_E4;
-    float       V_id_FE;
+
+struct detailvalue {
+  int ID;
+  int taille;
+  String valeurdetrame;
+  String valeurconverted;
+  int status; // 0: pas decodé ; 1: decodé ; 2 partielement decodé  ; 3: inconnu (non exporter dans Mqtt) 
+  String Description;
 };
 
-struct trame_value Electrovalue;
+
+struct detailvalue Electrovaluefull[255];
+
 
 HADevice deviceHA;
 // dernier paramètre pour le nombre de sensorMQTT à lister
@@ -214,8 +162,8 @@ HASensorNumber temp0D("pool_temp0D",HASensorNumber::PrecisionP0);
 HASensorNumber temp0E("pool_temp0E",HASensorNumber::PrecisionP0);
 HASensorNumber temp0F("pool_temp0F",HASensorNumber::PrecisionP0);
 HASensorNumber temp10("pool_temp10",HASensorNumber::PrecisionP0);
-HASensorNumber temp12("pool_temp12",HASensorNumber::PrecisionP0);
-HASensorNumber temp13("pool_temp13",HASensorNumber::PrecisionP0);
+HASensor temp12("pool_temp12");
+HASensor temp13("pool_temp13");
 HASensorNumber temp1F("pool_temp1F",HASensorNumber::PrecisionP0);
 HASensorNumber temp28("pool_temp28",HASensorNumber::PrecisionP0);
 HASensorNumber temp29("pool_temp29",HASensorNumber::PrecisionP0);
@@ -227,8 +175,8 @@ HASensorNumber temp5F("pool_temp5F",HASensorNumber::PrecisionP0);
 HASensorNumber temp69("pool_temp69",HASensorNumber::PrecisionP0);
 HASensorNumber temp6A("pool_temp6A",HASensorNumber::PrecisionP0);
 HASensorNumber temp8F("pool_temp8F",HASensorNumber::PrecisionP0);
-HASensorNumber temp90("pool_temp90",HASensorNumber::PrecisionP0);
-HASensorNumber temp91("pool_temp91",HASensorNumber::PrecisionP0);
+HASensor temp90("pool_temp90");
+HASensor temp91("pool_temp91");
 HASensorNumber temp92("pool_temp92",HASensorNumber::PrecisionP0);
 HASensorNumber temp93("pool_temp93",HASensorNumber::PrecisionP0);
 HABinarySensor temp93B00("false93B00");
@@ -269,43 +217,81 @@ HASensorNumber tempE1O11("pool_tempE1O11",HASensorNumber::PrecisionP0);
 HASensorNumber tempE1O12("pool_tempE1O12",HASensorNumber::PrecisionP0);
 HASensorNumber tempE1O13("pool_tempE1O13",HASensorNumber::PrecisionP0);
 
-
-// HABinarySensor tempE1O9B00("falseE1O9B00");
-// HABinarySensor tempE1O9B01("falseE1O9B01");
-// HABinarySensor tempE1O9B02("falseE1O9B02");
-// HABinarySensor tempE1O9B03("falseE1O9B03");
-// HABinarySensor tempE1O9B04("falseE1O9B04");
-// HABinarySensor tempE1O9B05("falseE1O9B05");
-// HABinarySensor tempE1O9B06("falseE1O9B06");
-// HABinarySensor tempE1O9B07("falseE1O9B07");
-// HABinarySensor tempE1O10B00("falseE1O10B00");
-// HABinarySensor tempE1O10B01("falseE1O10B01");
-// HABinarySensor tempE1O10B02("falseE1O10B02");
-// HABinarySensor tempE1O10B03("falseE1O10B03");
-// HABinarySensor tempE1O10B04("falseE1O10B04");
-// HABinarySensor tempE1O10B05("falseE1O10B05");
-// HABinarySensor tempE1O10B06("falseE1O10B06");
-// HABinarySensor tempE1O10B07("falseE1O10B07");
-// HABinarySensor tempE1O11B00("falseE1O11B00");
-// HABinarySensor tempE1O11B01("falseE1O11B01");
-// HABinarySensor tempE1O11B02("falseE1O11B02");
-// HABinarySensor tempE1O11B03("falseE1O11B03");
-// HABinarySensor tempE1O11B04("falseE1O11B04");
-// HABinarySensor tempE1O11B05("falseE1O11B05");
-// HABinarySensor tempE1O11B06("falseE1O11B06");
-// HABinarySensor tempE1O11B07("falseE1O11B07");
-// HABinarySensor tempE1O12B00("falseE1O12B00");
-// HABinarySensor tempE1O12B01("falseE1O12B01");
-// HABinarySensor tempE1O12B02("falseE1O12B02");
-// HABinarySensor tempE1O12B03("falseE1O12B03");
-// HABinarySensor tempE1O12B04("falseE1O12B04");
-// HABinarySensor tempE1O12B05("falseE1O12B05");
-// HABinarySensor tempE1O12B06("falseE1O12B06");
-// HABinarySensor tempE1O12B07("falseE1O12B07");
-
 HASensor tempE2("pool_tempE2");
 HASensor tempE4("pool_tempE4");
 HASensorNumber tempFE("pool_tempFE",HASensorNumber::PrecisionP0);
+
+HABinarySensor injfPH("injph");
+
+
+static String htmltabdecode = "";
+static String htmltabpasdecode = "";
+static String htmltabpartieldecode = "";
+static String htmltabinconnu = "";
+static String page = "" ;
+
+void handleRoot(){   // Début de la page HTML
+    page = "<!DOCTYPE html>";
+    page += "<html lang='fr'>";
+    
+    page += "<head>";
+    page += "    <title>Passerel ESP32 / Electolyseur</title>";
+    page += "    <meta http-equiv='refresh' content='60' name='viewport' content='width=device-width, initial-scale=1' charset='UTF-8'/>";
+    page += "    <link rel='stylesheet' href='https://www.w3schools.com/w3css/4/w3.css'>";  // Utilisation du css 
+    page += "</head>";
+
+    page += "<body>";
+    page += "    <div class='w3-panel w3-padding-small w3-blue w3-center'>";
+    page += "        <p>Décodé</p>";
+    page += "    </div>";
+    page += "   <table class='w3-table-all'>";
+    page += "   <thead><tr class='w3-green'><th scope='col'>id hex</th><th scope='col'>id</th><th scope='col'>Taille</th><th scope='col'>Valeur</th><th scope='col'>Valeur exploité</th><th scope='col'>Description</th><th scope='col'>Status</th></tr>";
+    page += "   </thead><tbody>";
+    page +=  htmltabdecode;
+    page += "   </table>";
+
+    page += "    <div class='w3-panel w3-padding-small w3-blue w3-center'>";
+    page += "        <p>Pas décodé</p>";
+    page += "    </div>";
+    page += "   <table class='w3-table-all'>";
+    page += "   <thead><tr class='w3-orange'><th scope='col'>id hex</th><th scope='col'>id</th><th scope='col'>Taille</th><th scope='col'>Valeur</th><th scope='col'>Valeur exploité</th><th scope='col'>Description</th><th scope='col'>Status</th></tr>";
+    page += "   </thead><tbody>";
+    page +=  htmltabpasdecode;
+    page += "   </table>";
+
+    page += "    <div class='w3-panel w3-padding-small w3-blue w3-center'>";
+    page += "        <p>Partiellement décodé</p>";
+    page += "    </div>";
+    page += "   <table class='w3-table-all'>";
+    page += "   <thead><tr class='w3-orange'><th scope='col'>id hex</th><th scope='col'>id</th><th scope='col'>Taille</th><th scope='col'>Valeur</th><th scope='col'>Valeur exploité</th><th scope='col'>Description</th><th scope='col'>Status</th></tr>";
+    page += "   </thead><tbody>";
+    page +=  htmltabpartieldecode;
+    page += "   </table>";
+
+    page += "    <div class='w3-panel w3-padding-small w3-blue w3-center'>";
+    page += "        <p>Value inconnu</p>";
+    page += "    </div>";
+    page += "   <table class='w3-table-all'>";
+    page += "   <thead><tr class='w3-red'><th scope='col'>id hex</th><th scope='col'>id</th><th scope='col'>Taille</th><th scope='col'>Valeur</th><th scope='col'>Valeur exploité</th><th scope='col'>Description</th><th scope='col'>Status</th></tr>";
+    page += "   </thead><tbody>";
+    page +=  htmltabinconnu;
+    page += "   </table>";
+
+
+    page += "    <div class='w3-center w3-padding-16'>";
+    page += "        <p>Ce serveur est hébergé sur un ESP32</p>";
+    page += "        <i>Créé par Richard Durand</i>";
+    page += "    </div>";
+
+    page += "</body>";
+    page += "</html>";  // Fin de la page HTML
+
+    //webServer.setContentLength(page.length());  // Permet l'affichage plus rapide après chaque clic sur les boutons
+    //webServer.send(200, "text/html", page);
+    webServer.on("/", HTTP_GET, [](AsyncWebServerRequest *request){
+        request->send(200, "text/html", page);
+    });
+}
 
 void cb_handleTelnet() {
   if (telnetServer.hasClient()) {
@@ -316,6 +302,17 @@ void cb_handleTelnet() {
       telnetServer.available().stop();
     }
   }
+}
+void reboot_Bluetooth(){
+    Serial.println("Reboot Ble by timer");
+    btStop();
+    delay(500);
+    btStart();
+}
+
+void reboot_ESP(){
+    Serial.println("Reboot ESP by timer");
+    esp_restart();
 }
 
 void cb_loopElegantOTA(){
@@ -329,7 +326,8 @@ void cb_loopAvaibilityMQTT(){
   //deviceHA.setAvailability(true);
 
   //savoir si la connexion bluetooth est OK ou si le justsalt n'est pas sous tension.
-  bluetoothConnected.setState(connected);
+    bluetoothConnected.setState(connected);
+  
 
 }
 
@@ -340,62 +338,70 @@ void cb_loopHaIntegration(){
     //remove setAvaibility to use native check of Ha integration Shared availability
     deviceHA.setAvailability(true);
 
+
     wifiStrength.setValue(WiFi.RSSI());
     justsaltIp.setValue(WiFi.localIP().toString().c_str());
-    //Serial.print("E1 =");
-    //Serial.println(Electrovalue.V_id_E1);
-    //Serial.print("E1[8] =");
-    //Serial.println(Electrovalue.V_id_E1[8]);
-    //Serial.println((static_cast<int>(Electrovalue.V_id_E1[8]) ));
+    Serial.println("----------------------------- debut");
+    telnet.println("----------------------------- debut");
 
-    
-    // tempE1O9B00.setCurrentState((bool)(((Electrovalue.V_id_E1[9]) & 0x01) ));
-    // tempE1O9B01.setCurrentState((bool)(((Electrovalue.V_id_E1[9]) & 0x02) ));
-    // tempE1O9B02.setCurrentState((bool)(((Electrovalue.V_id_E1[9]) & 0x04) ));
-    // tempE1O9B03.setCurrentState((bool)(((Electrovalue.V_id_E1[9]) & 0x08) ));
-    // tempE1O9B04.setCurrentState((bool)(((Electrovalue.V_id_E1[9]) & 0x10) ));
-    // tempE1O9B05.setCurrentState((bool)(((Electrovalue.V_id_E1[9]) & 0x20) ));
-    // tempE1O9B06.setCurrentState((bool)(((Electrovalue.V_id_E1[9]) & 0x40) ));
-    // tempE1O9B07.setCurrentState((bool)(((Electrovalue.V_id_E1[9]) & 0x80) ));
+    htmltabdecode = "";
+    htmltabpasdecode = "";
+    htmltabpartieldecode = "";
+    htmltabinconnu = "";
 
-    // tempE1O10B00.setCurrentState((bool)(((Electrovalue.V_id_E1[10]) & 0x01) ));
-    // tempE1O10B01.setCurrentState((bool)(((Electrovalue.V_id_E1[10]) & 0x02) ));
-    // tempE1O10B02.setCurrentState((bool)(((Electrovalue.V_id_E1[10]) & 0x04) ));
-    // tempE1O10B03.setCurrentState((bool)(((Electrovalue.V_id_E1[10]) & 0x08) ));
-    // tempE1O10B04.setCurrentState((bool)(((Electrovalue.V_id_E1[10]) & 0x10) ));
-    // tempE1O10B05.setCurrentState((bool)(((Electrovalue.V_id_E1[10]) & 0x20) ));
-    // tempE1O10B06.setCurrentState((bool)(((Electrovalue.V_id_E1[10]) & 0x40) ));
-    // tempE1O10B07.setCurrentState((bool)(((Electrovalue.V_id_E1[10]) & 0x80) ));
+  for (size_t i = 0; i < 254; i++)
+  {
+    if(Electrovaluefull[i].valeurdetrame != NULL ){
+     
+        std::string str = "Valeur ";
+        str += ": ID = " + std::to_string(Electrovaluefull[i].ID);
+        str += ": taille = " + std::to_string(Electrovaluefull[i].taille);
+        str += ": Value = " + std::string(Electrovaluefull[i].valeurdetrame.c_str());
 
-    // tempE1O11B00.setCurrentState((bool)(((Electrovalue.V_id_E1[11]) & 0x01) ));
-    // tempE1O11B01.setCurrentState((bool)(((Electrovalue.V_id_E1[11]) & 0x02) ));
-    // tempE1O11B02.setCurrentState((bool)(((Electrovalue.V_id_E1[11]) & 0x04) ));
-    // tempE1O11B03.setCurrentState((bool)(((Electrovalue.V_id_E1[11]) & 0x08) ));
-    // tempE1O11B04.setCurrentState((bool)(((Electrovalue.V_id_E1[11]) & 0x10) ));
-    // tempE1O11B05.setCurrentState((bool)(((Electrovalue.V_id_E1[11]) & 0x20) ));
-    // tempE1O11B06.setCurrentState((bool)(((Electrovalue.V_id_E1[11]) & 0x40) ));
-    // tempE1O11B07.setCurrentState((bool)(((Electrovalue.V_id_E1[11]) & 0x80) ));
+        Serial.println(str.c_str());
+        telnet.println(str.c_str());
 
-    // tempE1O12B00.setCurrentState((bool)(((Electrovalue.V_id_E1[12]) & 0x01) ));
-    // tempE1O12B01.setCurrentState((bool)(((Electrovalue.V_id_E1[12]) & 0x02) ));
-    // tempE1O12B02.setCurrentState((bool)(((Electrovalue.V_id_E1[12]) & 0x04) ));
-    // tempE1O12B03.setCurrentState((bool)(((Electrovalue.V_id_E1[12]) & 0x08) ));
-    // tempE1O12B04.setCurrentState((bool)(((Electrovalue.V_id_E1[12]) & 0x10) ));
-    // tempE1O12B05.setCurrentState((bool)(((Electrovalue.V_id_E1[12]) & 0x20) ));
-    // tempE1O12B06.setCurrentState((bool)(((Electrovalue.V_id_E1[12]) & 0x40) ));
-    // tempE1O12B07.setCurrentState((bool)(((Electrovalue.V_id_E1[12]) & 0x80) ));
-    //Serial.println("FIN cb_loopHaIntegration");
+        String convertid = String(Electrovaluefull[i].ID,HEX) ;
+        if (convertid.length() == 1 ){ 
+            convertid = "0" + convertid ;
+            }
+        convertid.toUpperCase();
+
+
+// 0: pas decodé ; 1: decodé ; 2 partielement decodé  ; 3: inconnu (non exporter dans Mqtt) 
+
+        switch (Electrovaluefull[i].status){
+            case 0:
+                htmltabpasdecode += "<tr><th scope=''row''>" + convertid + "</th><th scope=''row''>" + String(Electrovaluefull[i].ID) + "</th><td>" + String(Electrovaluefull[i].taille) +"</td><td>" + String(Electrovaluefull[i].valeurdetrame.c_str()) +"</td><td>" + String(Electrovaluefull[i].valeurconverted.c_str()) +"</td><td>" + String(Electrovaluefull[i].Description) +"</td><td>" + String(Electrovaluefull[i].status) +"</td></tr>";
+                break;
+            case 1:
+                htmltabdecode += "<tr><th scope=''row''>" + convertid + "</th><th scope=''row''>" + String(Electrovaluefull[i].ID) + "</th><td>" + String(Electrovaluefull[i].taille) +"</td><td>" + String(Electrovaluefull[i].valeurdetrame.c_str()) +"</td><td>" + String(Electrovaluefull[i].valeurconverted.c_str()) +"</td><td>" + String(Electrovaluefull[i].Description) +"</td><td>" + String(Electrovaluefull[i].status) +"</td></tr>";
+                break;
+            case 2:
+                htmltabpartieldecode += "<tr><th scope=''row''>" + convertid + "</th><th scope=''row''>" + String(Electrovaluefull[i].ID) + "</th><td>" + String(Electrovaluefull[i].taille) +"</td><td>" + String(Electrovaluefull[i].valeurdetrame.c_str()) +"</td><td>" + String(Electrovaluefull[i].valeurconverted.c_str()) +"</td><td>" + String(Electrovaluefull[i].Description) +"</td><td>" + String(Electrovaluefull[i].status) +"</td></tr>";
+                break;
+            case 3:
+                htmltabinconnu += "<tr><th scope=''row''>" + convertid + "</th><th scope=''row''>" + String(Electrovaluefull[i].ID) + "</th><td>" + String(Electrovaluefull[i].taille) +"</td><td>" + String(Electrovaluefull[i].valeurdetrame.c_str()) +"</td><td>" + String(Electrovaluefull[i].valeurconverted.c_str()) +"</td><td>" + String(Electrovaluefull[i].Description) +"</td><td>" + String(Electrovaluefull[i].status) +"</td></tr>";
+                break;
+        }
+    } 
+  }
+  htmltabdecode += "</table>";
+  htmltabinconnu += "</table>";
+  htmltabpartieldecode += "</table>";
+  htmltabpasdecode += "</table>";
+
+  Serial.println("----------------------------- Fin");
+  telnet.println("----------------------------- Fin");
+  handleRoot();
+
 }
 
 void onStateChangedrebootesp (bool state, HASwitch* s){
     if (state == true){
         //lancer le reboot
         state =false;
-        //esp_restart();
-        //timeScheduler.disable() ;
-        esp_restart();
-     
-        
+        esp_restart();       
     }
 }
 
@@ -412,7 +418,11 @@ void onStateChangedbluetoothesp (bool state, HASwitch* s){
 
 void setupHaIntegration(){
     //HA integration
+    //deviceUniqID =WiFi.macAddress();
     deviceHA.setUniqueId(deviceUniqID, sizeof(deviceUniqID));
+    
+    //deviceHA.setUniqueId(WiFi.macAddress(), sizeof(WiFi.macAddress()));
+    
     deviceHA.setName("justsalt");
     deviceHA.setSoftwareVersion(version);
     deviceHA.setModel("Electolyseur");
@@ -524,17 +534,25 @@ void setupHaIntegration(){
     temp0B.setName("temp0B");
     temp0C.setName("temp0C");
     temp0D.setName("temp0D");
-    temp0E.setName("temp0E");
+    temp0E.setName("durée total electrolyseur");
+    temp0E.setUnitOfMeasurement("h");
+    temp0E.setIcon("mdi:timer-sand");
+
     temp0F.setName("minutes de fonctionement");
     temp0F.setUnitOfMeasurement("Min");
     temp0F.setIcon("mdi:counter");
 
     temp10.setName("temp10");
-    temp12.setName("temp12");
-    temp13.setName("temp13");
+    temp12.setName("date etalonage PH?");
+    temp12.setIcon("mdi:calendar-star-four-points");
+
+    temp13.setName("date etalonage ORP?");
+    temp13.setIcon("mdi:calendar-star-four-points");
+    
     temp1F.setName("temp1F");
     temp28.setName("temp28");
     temp29.setName("temp29");
+    temp2A.setName("temp2A");
     temp31.setName("temp31");
     temp50.setName("temp50");
     temp51.setName("temp51");
@@ -587,7 +605,7 @@ void setupHaIntegration(){
     tempB1.setIcon("mdi:network-outline");
 
     tempD0.setName("tempD0");
-    tempD1.setName("tempD1");
+    tempD1.setName("TLV");
     tempE1.setName("tempE1");
 
     tempE1O8.setName("tempE1O8");
@@ -596,43 +614,13 @@ void setupHaIntegration(){
     tempE1O11.setName("tempE1O11");
     tempE1O12.setName("tempE1O12");
     tempE1O13.setName("tempE1O13");
-        
-    // tempE1O9B00.setName("tempE1O9B00");
-    // tempE1O9B01.setName("tempE1O9B01");
-    // tempE1O9B02.setName("tempE1O9B02");
-    // tempE1O9B03.setName("tempE1O9B03");
-    // tempE1O9B04.setName("tempE1O9B04");
-    // tempE1O9B05.setName("tempE1O9B05");
-    // tempE1O9B06.setName("tempE1O9B06");
-    // tempE1O9B07.setName("tempE1O9B07");
-    // tempE1O10B00.setName("tempE1O10B00");
-    // tempE1O10B01.setName("tempE1O10B01");
-    // tempE1O10B02.setName("tempE1O10B02");
-    // tempE1O10B03.setName("tempE1O10B03");
-    // tempE1O10B04.setName("tempE1O10B04");
-    // tempE1O10B05.setName("tempE1O10B05");
-    // tempE1O10B06.setName("tempE1O10B06");
-    // tempE1O10B07.setName("tempE1O10B07");
-    // tempE1O11B00.setName("tempE1O11B00");
-    // tempE1O11B01.setName("tempE1O11B01");
-    // tempE1O11B02.setName("tempE1O11B02");
-    // tempE1O11B03.setName("tempE1O11B03");
-    // tempE1O11B04.setName("tempE1O11B04");
-    // tempE1O11B05.setName("tempE1O11B05");
-    // tempE1O11B06.setName("tempE1O11B06");
-    // tempE1O11B07.setName("tempE1O11B07");
-    // tempE1O12B00.setName("tempE1O12B00");
-    // tempE1O12B01.setName("tempE1O12B01");
-    // tempE1O12B02.setName("tempE1O12B02");
-    // tempE1O12B03.setName("tempE1O12B03");
-    // tempE1O12B04.setName("tempE1O12B04");
-    // tempE1O12B05.setName("tempE1O12B05");
-    // tempE1O12B06.setName("tempE1O12B06");
-    // tempE1O12B07.setName("tempE1O12B07");
-
+   
     tempE2.setName("tempE2");
     tempE4.setName("tempE4");
     tempFE.setName("tempFE");
+
+    injfPH.setName("Injection PH-");
+    injfPH.setIcon("mdi:ph");
 
     bluetoothConnected.setName("Bluetooth Status");
 
@@ -675,8 +663,10 @@ void setup_wifi() {
     Serial.println();
     Serial.print("Connecting to ");
 
-    WiFi.mode(WIFI_STA);
     Serial.println(ssid);
+    Serial.println(password);
+    
+
     WiFi.begin(ssid, password);
     while (WiFi.status() != WL_CONNECTED) {
       delay(500);
@@ -694,9 +684,13 @@ void setup_wifi() {
     Serial.print("Add task to monitor and reconnect wifi");
     
     //Elegant OTA
-    webServer.on("/", HTTP_GET, [](AsyncWebServerRequest *request) {
-    request->send(200, "text/plain", "Hi! I am ESP32 justsalt to update use http://[yourIP]/update.");
-     });
+    // webServer.on("/", HTTP_GET, [](AsyncWebServerRequest *request) {
+    // request->send(200, "text/plain", "Hi! I am ESP32 justsalt to update use http://[yourIP]/update.");
+    //  });
+    handleRoot();
+    // webServer.on("/", HTTP_GET, [](AsyncWebServerRequest *request){
+    //     request->send_P(200, "text/html", index_html);
+    // });
     ElegantOTA.begin(&webServer);    // Start ElegantOTA
     webServer.begin();
     Serial.println("HTTP server started");
@@ -726,7 +720,9 @@ void setup_wifi() {
     taskConnectBleServer.enable();
     
     Serial.print("Add task to Connec Ble server!!!!!!");
- 
+
+
+
 }
 
 
@@ -794,8 +790,6 @@ class ClientCallbacks : public NimBLEClientCallbacks {
     };
 };
 
-
-
 class MyAdvertisedDeviceCallbacks: public BLEAdvertisedDeviceCallbacks {
     /**
         Called for each advertising BLE server.
@@ -850,10 +844,13 @@ void notifyCB(NimBLERemoteCharacteristic* pRemoteCharacteristic, uint8_t* pData,
         countertrameold=0;
     } 
     Serial.println(str.c_str());
+    telnet.println(str.c_str());
+
     Serial.print("recep chaine taille =");
     Serial.println(length);
-    telnet.print("recep chaine taille = ");
-    telnet.println(length);
+
+    telnet.println("recep chaine");
+    //telnet.println(std::to_string(length));
     if (length > 5){
         int index =3;
         while (index +2 < length) {
@@ -882,53 +879,81 @@ void notifyCB(NimBLERemoteCharacteristic* pRemoteCharacteristic, uint8_t* pData,
             Serial.println(str.c_str());
             telnet.println(str.c_str());
 
+            Electrovaluefull[idvaleur].ID=idvaleur;
+            Electrovaluefull[idvaleur].taille=taillevaleur;
+            Electrovaluefull[idvaleur].valeurdetrame=Valuetrame.c_str();
+            Electrovaluefull[idvaleur].Description="";
+            Electrovaluefull[idvaleur].status=0;
+
             switch (idvaleur) {
             case 0x00: { 
-                //Electrovalue.V_id_00 = 0;
+
                 }break;
         
             case 0x01: {
                 uint8_t phhex = pData[index + 2];
                 float phf = static_cast<float>(phhex)/10;
                 ph.setValue(phf);
+                Electrovaluefull[idvaleur].valeurconverted = (std::to_string(phf)).c_str();
+                Electrovaluefull[idvaleur].Description="PH"; 
+                Electrovaluefull[idvaleur].status=1;
 
                 }break;
 
             case 0x02: {
-                uint8_t temphex = ((pData[index + 2]<< 8) + (pData[index +3]));
+                String info ="";
+                uint16_t temphex = ((pData[index + 2]<< 8) + (pData[index +3]));
                 float temp = static_cast<float>(temphex);
                 temp02.setValue(temp);
+                if ((bool)((temphex & 0x000A) )) {
+                    info += "<BR> &nbsp;&nbsp; - XXXA - Injection PH-: true";
+                    injfPH.setCurrentState(true);
+                } else {
+                    info += "<BR> &nbsp;&nbsp; - XXX0 - Injection PH-: false";
+                    injfPH.setCurrentState(false);
+                }
+                Electrovaluefull[idvaleur].valeurconverted = (std::to_string(temp)).c_str();
+                //info += "</span>";
+                Electrovaluefull[idvaleur].Description="Injection PH + ...." + info ; 
+                Electrovaluefull[idvaleur].status=2;
                 }break;
 
             case 0x03: {
                 uint8_t temphex = pData[index + 2];
                 float temp = static_cast<float>(temphex);
-                //Electrovalue.V_id_03 = temp; 
                 temp03.setValue(temp);
                 }break;
 
             case 0x06: {
                 uint16_t temphex = ((pData[index + 2]<< 8) + (pData[index + 3]));
                 //float temp = static_cast<float>(temphex);
+                Electrovaluefull[idvaleur].status=1;
+                Electrovaluefull[idvaleur].valeurconverted = (std::to_string(temphex)).c_str();
+                Electrovaluefull[idvaleur].Description="ORP"; 
                 orp.setValue(temphex);;
                 }break;
 
             case 0x08: {
                 uint8_t temphex = pData[index + 2];
                 float temp = static_cast<float>(temphex);
-                //Electrovalue.V_id_08 = temp;
                 temp08.setValue(temp);
                 }break;
 
             case 0x09: {
                 uint16_t tempeauhex = ((pData[index + 2]<< 8) + (pData[index +3]));
                 float tempeauf = static_cast<float>(tempeauhex)/10;
+                Electrovaluefull[idvaleur].status=1;
+                Electrovaluefull[idvaleur].valeurconverted = (std::to_string(tempeauf)).c_str();
+                Electrovaluefull[idvaleur].Description="temperature eau"; 
                 tempeau.setValue(tempeauf);
                 }break;
             
             case 0x0A: {
                 uint8_t selhex = pData[index + 2] ;
                 float self = static_cast<float>(selhex)/10;
+                Electrovaluefull[idvaleur].status=1;
+                Electrovaluefull[idvaleur].valeurconverted = (std::to_string(self)).c_str();
+                Electrovaluefull[idvaleur].Description="taux de sel"; 
                 sel.setValue(self);
                 }break;
 
@@ -938,7 +963,6 @@ void notifyCB(NimBLERemoteCharacteristic* pRemoteCharacteristic, uint8_t* pData,
                 float temp = static_cast<float>(temphex);
                 temp0B.setValue(temp);
                 }
-                //Electrovalue.V_id_0B = temp;
                 }break;
             
             case 0x0C: {
@@ -950,63 +974,82 @@ void notifyCB(NimBLERemoteCharacteristic* pRemoteCharacteristic, uint8_t* pData,
                 }break;
 
             case 0x0D: {
-                uint8_t temphex = ((pData[index + 2]<< 8) + (pData[index +3]));
+                uint16_t temphex = ((pData[index + 2]<< 8) + (pData[index +3]));
                 float temp = static_cast<float>(temphex);
                 temp0D.setValue(temp);
                 }break;
 
             case 0x0E: {
-                uint8_t temphex = ((pData[index + 2]<< 8) + (pData[index +3]));
+                uint16_t temphex = ((pData[index + 2]<< 8) + (pData[index +3]));
                 float temp = static_cast<float>(temphex);
+                Electrovaluefull[idvaleur].status=1;
+                Electrovaluefull[idvaleur].valeurconverted = (std::to_string(temp)).c_str();
+                Electrovaluefull[idvaleur].Description="Compteur Heure total de fonctionnement"; 
                 temp0E.setValue(temp);
                 }break;
 
             case 0x0F: {
-                uint8_t temphex = ((pData[index + 2]<< 8) + (pData[index +3]));
+                uint16_t temphex = ((pData[index + 2]<< 8) + (pData[index +3]));
                 float temp = static_cast<float>(temphex);
+                Electrovaluefull[idvaleur].status=1;
+                Electrovaluefull[idvaleur].valeurconverted = (std::to_string(temp)).c_str();
+                Electrovaluefull[idvaleur].Description="Minutes de fonctionnement"; 
                 temp0F.setValue(temp);
                 }break;
             
             case 0x10: {
-                uint8_t temphex = ((pData[index + 2]<< 8) + (pData[index +3]));
+                uint16_t temphex = ((pData[index + 2]<< 8) + (pData[index +3]));
                 float temp = static_cast<float>(temphex);
-                //Electrovalue.V_id_10 = temp;
                 temp10.setValue(temp);
                 }break;
 
             case 0x11: {
                 uint16_t volhex = ((pData[index + 2]<< 8) + (pData[index +3]));
                 float volf = static_cast<float>(volhex);
+                Electrovaluefull[idvaleur].status=1;
+                Electrovaluefull[idvaleur].valeurconverted = (std::to_string(volf)).c_str();
+                Electrovaluefull[idvaleur].Description="Volume de la piscine"; 
                 vol.setState(volf);
                 }break;
             
             case 0x12: {
-                uint32_t temphex = (pData[index + 2]<< 24) + (pData[index + 3]<< 16)+ (pData[index + 4]<< 8) + (pData[index +5]);
-                float temp = static_cast<float>(temphex);
-                //Electrovalue.V_id_12 = temp;
-                temp12.setValue(temp);
-                
+                uint8_t dayphex = (pData[index + 3]);
+                uint8_t monthphex = (pData[index + 4]);
+                uint8_t yearphex = (pData[index +5]);
+                int dayf = static_cast<int>(dayphex);
+                int monthf = static_cast<int>(monthphex);
+                int yearf = static_cast<int>(yearphex);
+
+                std::string datestr =  std::to_string(dayf) + "/" + std::to_string(monthf) + "/20" + std::to_string(yearf);
+                Electrovaluefull[idvaleur].status=1;
+                Electrovaluefull[idvaleur].valeurconverted = (datestr.c_str());
+                Electrovaluefull[idvaleur].Description="Date etalonage PH"; 
+                temp12.setValue(datestr.c_str()) ;
                 }break;
 
             case 0x13: {
-                uint32_t temphex = (pData[index + 2]<< 24) + (pData[index + 3]<< 16)+ (pData[index + 4]<< 8) + (pData[index +5]);
-                float temp = static_cast<float>(temphex);
-                //Electrovalue.V_id_13 = temp;
-                temp13.setValue(temp);
-                
+                uint8_t dayphex = (pData[index + 3]);
+                uint8_t monthphex = (pData[index + 4]);
+                uint8_t yearphex = (pData[index +5]);
+                int dayf = static_cast<float>(dayphex);
+                int monthf = static_cast<float>(monthphex);
+                int yearf = static_cast<float>(yearphex);
+                std::string datestr =  std::to_string(dayf) + "/" + std::to_string(monthf) + "/20" + std::to_string(yearf);
+                Electrovaluefull[idvaleur].status=1;
+                Electrovaluefull[idvaleur].valeurconverted = (datestr.c_str());
+                Electrovaluefull[idvaleur].Description="Date etalonage ORP"; 
+                temp13.setValue(datestr.c_str()) ;
                 }break;
 
             case 0x1F: {
-                uint8_t temphex = ((pData[index + 2]<< 8) + (pData[index +3]));
+                uint16_t temphex = ((pData[index + 2]<< 8) + (pData[index +3]));
                 float temp = static_cast<float>(temphex);
-                //Electrovalue.V_id_1F = temp;
                 temp1F.setValue(temp);
                 }break;
             
             case 0x28: {
-                uint8_t temphex = ((pData[index + 2]<< 8) + (pData[index +3]));
+                uint16_t temphex = ((pData[index + 2]<< 8) + (pData[index +3]));
                 float temp = static_cast<float>(temphex);
-                //Electrovalue.V_id_28 = temp;
                 temp28.setValue(temp);
                 
                 }break;
@@ -1014,20 +1057,21 @@ void notifyCB(NimBLERemoteCharacteristic* pRemoteCharacteristic, uint8_t* pData,
             case 0x29: {
                 uint8_t temphex = pData[index + 2];
                 float temp = static_cast<float>(temphex);
-                //Electrovalue.V_id_29 = temp;
                 temp29.setValue(temp);
                 }break;
             
             case 0x2A: {
                 uint8_t temphex = pData[index + 2];
                 float temp = static_cast<float>(temphex);
-                //Electrovalue.V_id_2A = temp;
                 temp2A.setValue(temp);
                 }break;
             
             case 0x30: {
                 uint8_t phchex = pData[index + 2] ;
                 float phcf = static_cast<float>(phchex)/10;
+                Electrovaluefull[idvaleur].status=1;
+                Electrovaluefull[idvaleur].valeurconverted = (std::to_string(phcf)).c_str();
+                Electrovaluefull[idvaleur].Description="Consigne PH"; 
                 phconsigne.setState(phcf);
                 }break;
             
@@ -1035,101 +1079,95 @@ void notifyCB(NimBLERemoteCharacteristic* pRemoteCharacteristic, uint8_t* pData,
                 uint8_t temphex = pData[index + 2];
                 float temp = static_cast<float>(temphex);
                 temp31.setValue(temp);
-                //Electrovalue.V_id_31 = temp;
                 }break;         
 
             case 0x32: {
                 uint8_t acidehex = pData[index + 2] ;
                 float acidef = static_cast<float>(acidehex);
-                //Electrovalue.V_id_32 = acidef;
+                Electrovaluefull[idvaleur].status=1;
+                Electrovaluefull[idvaleur].valeurconverted = (std::to_string(acidef)).c_str();
+                Electrovaluefull[idvaleur].Description="taux acide"; 
                 acide.setState(acidef);
                 }break;
             
             case 0x33: {
                 uint8_t prodhex = pData[index + 2] ;
                 float prodf = static_cast<float>(prodhex);
-                //Electrovalue.V_id_33 = prodf;
+                Electrovaluefull[idvaleur].status=1;
+                Electrovaluefull[idvaleur].valeurconverted = (std::to_string(prodf)).c_str();
+                Electrovaluefull[idvaleur].Description="production"; 
                 prod.setState(prodf);
                 }break;
 
             case 0x35: {
                 uint8_t orpchex = pData[index + 2] ;
                 float orpcf = static_cast<float>(orpchex)*10;
-                //Electrovalue.V_id_35 = orpcf;
+                Electrovaluefull[idvaleur].status=1;
+                Electrovaluefull[idvaleur].valeurconverted = (std::to_string(orpcf)).c_str();
+                Electrovaluefull[idvaleur].Description="Consigne ORP"; 
                 orpconsigne.setState(orpcf);
                 }break;
             
             case 0x37: {
                 uint8_t alarmeorphex = pData[index + 2] ;
                 float alarmeorpf = static_cast<float>(alarmeorphex);
-                //Electrovalue.V_id_37 = alarmeorpf;
+                Electrovaluefull[idvaleur].status=1;
+                Electrovaluefull[idvaleur].valeurconverted = (std::to_string(alarmeorpf)).c_str();
+                Electrovaluefull[idvaleur].Description="seuil Alarme ORP"; 
                 orpalarme.setState(alarmeorpf);
                 }break;
     
             case 0x39: {
                 uint8_t inversionhex = pData[index + 2] ;
                 float inversionvalf = static_cast<float>(inversionhex);
-                //Electrovalue.V_id_39 = inversionvalf;
+                Electrovaluefull[idvaleur].status=1;
+                Electrovaluefull[idvaleur].valeurconverted = (std::to_string(inversionvalf)).c_str();
+                Electrovaluefull[idvaleur].Description="Inversion"; 
                 inversion.setState(inversionvalf);
                 }break;
 
             case 0x50: {
                 uint8_t temphex = pData[index + 2];
                 float temp = static_cast<float>(temphex);
-                //Electrovalue.V_id_50 = temp;
                 temp50.setValue(temp);
                 }break;
 
             case 0x51: {
                 uint8_t temphex = pData[index + 2];
                 float temp = static_cast<float>(temphex);
-                //Electrovalue.V_id_51 = temp;
                 temp51.setValue(temp);
                 }break;
 
             case 0x5F: {
                 uint8_t temphex = pData[index + 2];
                 float temp = static_cast<float>(temphex);
-                //Electrovalue.V_id_5F = temp;
                 temp5F.setValue(temp);
                 }break;
             
             case 0x69: {
                 uint32_t temphex = (pData[index + 2]<< 24) + (pData[index + 3]<< 16)+ (pData[index + 4]<< 8) + (pData[index +5]);
                 float temp = static_cast<float>(temphex);
-                //Electrovalue.V_id_69 = temp;
                 temp69.setValue(temp);
                 }break;
 
             case 0x6A: {
                 uint8_t temphex = pData[index + 2];
                 float temp = static_cast<float>(temphex);
-                //Electrovalue.V_id_6A = temp;
                 temp6A.setValue(temp);
                 }break;
 
             case 0x8F: {
                 uint8_t temphex = pData[index + 2];
                 float temp = static_cast<float>(temphex);
-                //Electrovalue.V_id_8F = temp;
                 temp8F.setValue(temp);
                 }break;
                 
             case 0x90: {
-                // 90.08.00.00.00.00.00.00.00.14.
-                uint64_t temphex =  (pData[index + 6]<< 24) + (pData[index + 7]<< 16)+ (pData[index + 8]<< 8) + pData[index + 9];
-                float temp = static_cast<float>(temphex);
-                telnet.printf( "Temp : %ld - tempex : %ld \r\n", temp, temphex );
-                temp90.setValue(temp);
-                //Electrovalue.V_id_90 = temp;
+                temp90.setValue(Valuetrame.c_str());
                 }break;
 
             case 0x91: {
-                uint64_t temphex =  (pData[index + 6]<< 24) + (pData[index + 7]<< 16)+ (pData[index + 8]<< 8) + pData[index + 9];
-                float temp = static_cast<float>(temphex);
-                telnet.printf( "Temp : %ld - tempex : %ld \r\n", temp, temphex );
-                temp91.setValue(temp);
-                //temp91.setValue(tempstring.c_str());
+                temp91.setValue(Valuetrame.c_str());
                 }break;
             
             case 0x92: {
@@ -1158,31 +1196,36 @@ void notifyCB(NimBLERemoteCharacteristic* pRemoteCharacteristic, uint8_t* pData,
                 temp93B15.setCurrentState((bool)((temphex & 0x2000) ));
                 temp93B16.setCurrentState((bool)((temphex & 0x4000) ));
                 temp93B17.setCurrentState((bool)((temphex & 0x8000) ));
-                
-                
                 }break;
 
             case 0x94: {
-                uint8_t temphex = ((pData[index + 2]<< 8) + (pData[index +3]));
+                uint16_t temphex = ((pData[index + 2]<< 8) + (pData[index +3]));
                 float temp = static_cast<float>(temphex);
-                //Electrovalue.V_id_94 = temp;
                 temp94.setValue(temp);
                 }break;
 
             case 0x95: {
                 uint32_t idcodehex = (pData[index + 2]<< 24) + (pData[index + 3]<< 16)+ (pData[index + 4]<< 8) + (pData[index +5]);
                 float idcodefloat = static_cast<float>(idcodehex);
-                //Electrovalue.V_id_95 = idcodefloat;
+                Electrovaluefull[idvaleur].status=2;
+                Electrovaluefull[idvaleur].valeurconverted = (std::to_string(idcodefloat)).c_str();
+                Electrovaluefull[idvaleur].Description="ID Code"; 
                 temp95.setValue(idcodefloat);
                 
                 }break;
             
             case 0x96: {
                 temp96.setValue(Valuetrame.c_str());
+                Electrovaluefull[idvaleur].status=1;
+                Electrovaluefull[idvaleur].valeurconverted = Valuetrame.c_str();
+                Electrovaluefull[idvaleur].Description="version"; 
                 }break;
             
             case 0x97: {
                 temp97.setValue(Valuetrame.c_str());
+                Electrovaluefull[idvaleur].status=1;
+                Electrovaluefull[idvaleur].valeurconverted = Valuetrame.c_str();
+                Electrovaluefull[idvaleur].Description="Slave (version hardware)";
                 }break;
 
             case 0x99: {
@@ -1191,6 +1234,10 @@ void notifyCB(NimBLERemoteCharacteristic* pRemoteCharacteristic, uint8_t* pData,
                     tempstring += pData[i];
                 }
                 temp99.setValue(tempstring.c_str());
+                Electrovaluefull[idvaleur].status=1;
+                Electrovaluefull[idvaleur].valeurconverted = tempstring.c_str();
+                Electrovaluefull[idvaleur].Description="Nom";
+                
                 }break;
 
             case 0x9A: {
@@ -1199,19 +1246,20 @@ void notifyCB(NimBLERemoteCharacteristic* pRemoteCharacteristic, uint8_t* pData,
                     tempstring += pData[i];
                 }
                 temp9A.setValue(tempstring.c_str());
+                Electrovaluefull[idvaleur].status=1;
+                Electrovaluefull[idvaleur].valeurconverted = tempstring.c_str();
+                Electrovaluefull[idvaleur].Description="SN";
                 }break;
 
             case 0x9B: {
-                uint8_t temphex = ((pData[index + 2]<< 8) + (pData[index +3]));
+                uint16_t temphex = ((pData[index + 2]<< 8) + (pData[index +3]));
                 float temp = static_cast<float>(temphex);
-                //Electrovalue.V_id_9B = temp;
                 temp9B.setValue(temp);
                 }break;
 
             case 0x9C: {
-                uint8_t temphex = ((pData[index + 2]<< 8) + (pData[index +3]));
+                uint16_t temphex = ((pData[index + 2]<< 8) + (pData[index +3]));
                 float temp = static_cast<float>(temphex);
-                //Electrovalue.V_id_9C = temp;
                 temp9C.setValue(temp);
                 }break;
 
@@ -1228,7 +1276,6 @@ void notifyCB(NimBLERemoteCharacteristic* pRemoteCharacteristic, uint8_t* pData,
 
                 uint8_t temphex = pData[index + 2];
                 float temp = static_cast<float>(temphex);
-                //Electrovalue.V_id_8F = temp;
                 tempB0.setValue(temp);
                 }
                 
@@ -1236,8 +1283,6 @@ void notifyCB(NimBLERemoteCharacteristic* pRemoteCharacteristic, uint8_t* pData,
                 
     
             case 0xB1: {
-            //     std::string tempstring = rawhex.substr((index + 2 )* 2, 12);
-            //     id(JustSalt_macbt_textsensor).publish_state(tempstring);
                 String tempstring = ""; 
                 for ( int i = index + 2; i < index + 2 + taillevaleur ; i++ ) {
                     tempstring += String(pData[i],HEX) ;
@@ -1246,7 +1291,9 @@ void notifyCB(NimBLERemoteCharacteristic* pRemoteCharacteristic, uint8_t* pData,
                     }
                 }
                 tempstring.toUpperCase();
-                telnet.println( tempstring.c_str());
+                Electrovaluefull[idvaleur].status=1;
+                Electrovaluefull[idvaleur].valeurconverted = tempstring.c_str();
+                Electrovaluefull[idvaleur].Description="Mac adress";
                 tempB1.setValue(tempstring.c_str());
                 }break;
             
@@ -1264,15 +1311,16 @@ void notifyCB(NimBLERemoteCharacteristic* pRemoteCharacteristic, uint8_t* pData,
                     }
                 }
                 tempstring.toUpperCase();
-                telnet.println( tempstring.c_str());
                 tempD0.setValue(tempstring.c_str());
                 }break;
 
             case 0xD1: {
-                uint16_t temphex = ((pData[index + 2]<< 8) + (pData[index +3]));
+                uint8_t temphex = (pData[index + 2]) ;
                 float temp = static_cast<float>(temphex);
-                //Electrovalue.V_id_D1 = temp;
                 tempD1.setValue(temp);
+                Electrovaluefull[idvaleur].status=1;
+                Electrovaluefull[idvaleur].valeurconverted = (std::to_string(temp)).c_str();
+                Electrovaluefull[idvaleur].Description="TLV";
                 }break;
             
             
@@ -1280,8 +1328,6 @@ void notifyCB(NimBLERemoteCharacteristic* pRemoteCharacteristic, uint8_t* pData,
             case 0xE1: {
                 //  E1.0F.18.04.11.11.00.33.00.00.88.00.F8.00.00.00.00
                 tempE1.setValue(Valuetrame.c_str());
-                Electrovalue.V_id_E1 = Valuetrame.c_str();
-                 //9-11
                 tempE1O8.setValue(static_cast<int>((pData[index +2 +8])) );
                 tempE1O9.setValue(static_cast<int>((pData[index +2 +9])) );
                 tempE1O10.setValue(static_cast<int>((pData[index +2 +10])) );
@@ -1303,14 +1349,13 @@ void notifyCB(NimBLERemoteCharacteristic* pRemoteCharacteristic, uint8_t* pData,
             case 0xFE: {
                 uint8_t temphex = pData[index + 2];
                 float temp = static_cast<float>(temphex);
-                //Electrovalue.V_id_FE = temp;
                 tempFE.setValue(temp);
-                
                 }break;
     
             default: {
                 Serial.print( "idvaleur Non implementee " );
                 Serial.println(idvaleur);
+                Electrovaluefull[idvaleur].status=3;
                 };
             }
             countertry ++;
@@ -1589,7 +1634,7 @@ void onwriteble (int ValueID ,float numberset,int ValueSizea){
     str += ": Myvalue f = " + std::to_string(myvalue.f);
     str += ": Myvalue s 0 = " + std::to_string(myvalue.s[0]);
     str += ": Myvalue s 1 = " + std::to_string(myvalue.s[1]);
-    str += " : value ID = " + std::to_string(trame[3]);
+    str += ": value ID = " + std::to_string(trame[3]);
     str += ", taille = " + std::to_string(trame[4]);
     str += ", Value ch 5= " + std::to_string(trame[5]);
     str += ", Value ch 6= " + std::to_string(trame[6]);
@@ -1615,8 +1660,9 @@ void onwriteble (int ValueID ,float numberset,int ValueSizea){
 
 void setup (){
     Serial.begin(115200);
-    timeScheduler.init();
+    // Wifi Manager & wait?
 
+    timeScheduler.init();
     timeScheduler.addTask(taskSetup);
     taskSetup.enable();
     Serial.println("add Task to setup justsalt");
@@ -1626,6 +1672,7 @@ void setup (){
 
 void loop (){
     timeScheduler.execute();
+    
 }
 
 
